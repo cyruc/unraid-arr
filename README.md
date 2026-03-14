@@ -36,29 +36,72 @@ Uses a single `/data` share to enable **hardlinks and atomic moves** — no extr
 | qBittorrent | `/data/torrents` | Only needs torrent downloads |
 | Radarr / Sonarr | `/data` | Needs both torrents + media for hardlinks |
 
-**Important:** In Radarr/Sonarr, set the root folder to `/data/media/movies` and `/data/media/tv`. In qBittorrent, set the default save path to `/data/torrents` with category subfolders (`movies`, `tv`).
+## Getting Started
 
-## Prerequisites
+### 1. Prepare Unraid
 
-- Unraid server with Docker enabled
-- Ansible with `community.docker` collection
-- PIA subscription with WireGuard support
-- Ansible Vault for secrets
-- "Tunable (support Hard Links)" enabled in Unraid Settings > Global Share Settings
+1. **Enable Docker** — Settings > Docker > Enable Docker: Yes
+2. **Install NerdTools** — Apps > search "NerdTools" > install
+3. **Enable Python 3** — Settings > Nerd Tools > toggle Python 3 on
+4. **Enable SSH** — Settings > Management Access > enable SSH
+5. **Enable hardlinks** — Settings > Global Share Settings > Tunable (support Hard Links): Yes
+6. **Create the data share** — Shares > Add Share > name it `data`
 
-## Secrets (ansible-vault)
-
-```yaml
-vault_pia_user: "your-pia-username"
-vault_pia_pass: "your-pia-password"
-vault_wg_key: "your-wireguard-private-key"
-```
-
-## Usage
+### 2. Set up your workstation
 
 ```bash
-ansible-playbook arr-stack.yml --ask-vault-pass
+# Install Ansible
+brew install ansible  # macOS
+# or: sudo apt install ansible  # Debian/Ubuntu
+
+# Install the Docker collection
+ansible-galaxy collection install community.docker
+
+# Clone the repo
+git clone git@github.com:cyruc/unraid-arr.git
+cd unraid-arr
 ```
+
+### 3. Configure
+
+```bash
+# Set your Unraid IP
+nano inventory.yml
+
+# Create and encrypt your secrets
+cp vault.yml.example vault.yml
+nano vault.yml  # fill in your PIA credentials and WireGuard private key
+ansible-vault encrypt vault.yml
+```
+
+### 4. Deploy
+
+```bash
+ansible-playbook arr-stack.yml -i inventory.yml -e @vault.yml --ask-vault-pass
+```
+
+This creates all directories, Docker networks, and containers automatically.
+
+### 5. Configure the apps
+
+**qBittorrent** (`:8080`)
+- Set default save path to `/data/torrents`
+- Create category `movies` with path `/data/torrents/movies`
+- Create category `tv` with path `/data/torrents/tv`
+
+**Prowlarr** (`:9696`)
+- Add your indexers
+- Settings > Apps > add Radarr and Sonarr
+
+**Radarr** (`:7878`)
+- Set root folder to `/data/media/movies`
+- Add qBittorrent as download client, set category to `movies`
+
+**Sonarr** (`:8989`)
+- Set root folder to `/data/media/tv`
+- Add qBittorrent as download client, set category to `tv`
+
+Search for something in Radarr or Sonarr and the full pipeline runs: Prowlarr finds it > qBittorrent downloads it through VPN > Radarr/Sonarr hardlinks it into your media library.
 
 ## Ports
 
