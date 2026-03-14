@@ -1,0 +1,164 @@
+---
+- name: Deploy ARR Stack with Gluetun on Unraid
+  hosts: unraid
+  become: true
+  collections:
+    - community.docker
+  vars:
+    appdata_path: "/mnt/user/appdata"
+    media_path: "/mnt/user/media"
+    download_path: "/mnt/user/downloads"
+    pia_user: "{{ vault_pia_user }}"
+    pia_pass: "{{ vault_pia_pass }}"
+    timezone: "America/Los_Angeles"
+    umask: "002"
+    uid: 99
+    gid: 100
+
+  tasks:
+    - name: Create appdata directories
+      file:
+        path: "{{ appdata_path }}/{{ item }}"
+        state: directory
+        mode: '0775'
+        owner: "{{ uid }}"
+        group: "{{ gid }}"
+      loop:
+        - gluetun
+        - prowlarr
+        - radarr
+        - sonarr
+        - qbittorrent/config
+        - qbittorrent/downloads
+
+    - name: Create Docker networks
+      docker_network:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - arr_backend
+        - vpn_net
+
+    - name: Deploy Gluetun (PIA WireGuard)
+      docker_container:
+        name: gluetun
+        image: qmcgaw/gluetun:latest
+        state: started
+        restart_policy: unless-stopped
+        capabilities: [NET_ADMIN]
+        networks:
+          - name: vpn_net
+        ports:
+          - "6888:6888"
+          - "6888:6888/udp"
+          - "9696:9696"   # Prowlarr
+          - "8080:8080"   # qBittorrent
+        volumes:
+          - "{{ appdata_path }}/gluetun:/gluetun"
+        env:
+          VPN_SERVICE_PROVIDER: pia
+          VPN_TYPE: wireguard
+          WIREGUARD_PRIVATE_KEY: "{{ vault_wg_key | default('') }}"
+          WIREGUARD_ADDRESS: "10.13.13.2/24"
+          SERVER_COUNTRIES: Canada
+          TZ: "{{ timezone }}"
+          DNS_ADDRESS: "127.0.0.11,9.9.9.9"
+          DOT: "off"
+          HTTPPROXY: "off"
+          PUID: "{{ uid }}"
+          PGID: "{{ gid }}"
+          UMASK: "{{ umask }}"
+        memory: 512M
+        healthcheck:
+          test: ["CMD", "ping", "-c1", "8.8.8.8"]
+          interval: 30s
+          retries: 3
+
+    - name: Wait for Gluetun healthy
+      docker_container_info:
+        name: gluetun
+      register: gluetun_info
+      until: gluetun_info.container.State.Health.Status == "healthy"
+      retries: 20
+      delay: 10
+
+    - name: Deploy qBittorrent (VPN routed via Gluetun)
+      docker_container:
+        name: qbittorrent
+        image: hotio/qbittorrent:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: vpn_net
+          - name: arr_backend
+        networks_cli_compatible: yes
+        volumes:
+          - "{{ appdata_path }}/qbittorrent/config:/config"
+          - "{{ download_path }}:/downloads"
+        env:
+          PUID: "{{ uid }}"
+          PGID: "{{ gid }}"
+          UMASK: "{{ umask }}"
+          TZ: "{{ timezone }}"
+        memory: 2G
+
+    - name: Deploy Prowlarr (VPN routed)
+      docker_container:
+        name: prowlarr
+        image: hotio/prowlarr:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: vpn_net
+          - name: arr_backend
+        networks_cli_compatible: yes
+        volumes:
+          - "{{ appdata_path }}/prowlarr:/config"
+        env:
+          PUID: "{{ uid }}"
+          PGID: "{{ gid }}"
+          UMASK: "{{ umask }}"
+          TZ: "{{ timezone }}"
+        memory: 1G
+
+    - name: Deploy Radarr
+      docker_container:
+        name: radarr
+        image: hotio/radarr:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: arr_backend
+        ports:
+          - "7878:7878"
+        volumes:
+          - "{{ appdata_path }}/radarr:/config"
+          - "{{ media_path }}/movies:/movies"
+          - "{{ download_path }}:/downloads"
+        env:
+          PUID: "{{ uid }}"
+          PGID: "{{ gid }}"
+          UMASK: "{{ umask }}"
+          TZ: "{{ timezone }}"
+        memory: 1G
+
+    - name: Deploy Sonarr
+      docker_container:
+        name: sonarr
+        image: hotio/sonarr:latest
+        state: started
+        restart_policy: unless-stopped
+        networks:
+          - name: arr_backend
+        ports:
+          - "8989:8989"
+        volumes:
+          - "{{ appdata_path }}/sonarr:/config"
+          - "{{ media_path }}/tv:/tv"
+          - "{{ download_path }}:/downloads"
+        env:
+          PUID: "{{ uid }}"
+          PGID: "{{ gid }}"
+          UMASK: "{{ umask }}"
+          TZ: "{{ timezone }}"
+        memory: 1G
