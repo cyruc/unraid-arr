@@ -6,16 +6,31 @@
     - community.docker
   vars:
     appdata_path: "/mnt/user/appdata"
-    media_path: "/mnt/user/media"
-    download_path: "/mnt/user/downloads"
+    # Single /data share — enables hardlinks and atomic moves
+    # Structure: /mnt/user/data/{torrents/{movies,tv},media/{movies,tv}}
+    data_path: "/mnt/user/data"
     pia_user: "{{ vault_pia_user }}"
     pia_pass: "{{ vault_pia_pass }}"
     timezone: "America/Los_Angeles"
     umask: "002"
-    uid: 99
-    gid: 100
+    uid: 99  # nobody
+    gid: 100  # users
 
   tasks:
+    # --- Folder structure (Trash Guides recommended) ---
+    - name: Create unified data directories for hardlinks
+      file:
+        path: "{{ data_path }}/{{ item }}"
+        state: directory
+        mode: '0775'
+        owner: "{{ uid }}"
+        group: "{{ gid }}"
+      loop:
+        - torrents/movies
+        - torrents/tv
+        - media/movies
+        - media/tv
+
     - name: Create appdata directories
       file:
         path: "{{ appdata_path }}/{{ item }}"
@@ -28,9 +43,9 @@
         - prowlarr
         - radarr
         - sonarr
-        - qbittorrent/config
-        - qbittorrent/downloads
+        - qbittorrent
 
+    # --- Networking ---
     - name: Create Docker networks
       docker_network:
         name: "{{ item }}"
@@ -39,6 +54,7 @@
         - arr_backend
         - vpn_net
 
+    # --- Gluetun VPN Gateway ---
     - name: Deploy Gluetun (PIA WireGuard)
       docker_container:
         name: gluetun
@@ -82,10 +98,11 @@
       retries: 20
       delay: 10
 
+    # --- Download client ---
     - name: Deploy qBittorrent (VPN routed via Gluetun)
       docker_container:
         name: qbittorrent
-        image: hotio/qbittorrent:latest
+        image: ghcr.io/hotio/qbittorrent:latest
         state: started
         restart_policy: unless-stopped
         networks:
@@ -93,8 +110,8 @@
           - name: arr_backend
         networks_cli_compatible: yes
         volumes:
-          - "{{ appdata_path }}/qbittorrent/config:/config"
-          - "{{ download_path }}:/downloads"
+          - "{{ appdata_path }}/qbittorrent:/config"
+          - "{{ data_path }}/torrents:/data/torrents"
         env:
           PUID: "{{ uid }}"
           PGID: "{{ gid }}"
@@ -102,10 +119,11 @@
           TZ: "{{ timezone }}"
         memory: 2G
 
+    # --- Indexer manager ---
     - name: Deploy Prowlarr (VPN routed)
       docker_container:
         name: prowlarr
-        image: hotio/prowlarr:latest
+        image: ghcr.io/hotio/prowlarr:latest
         state: started
         restart_policy: unless-stopped
         networks:
@@ -121,10 +139,13 @@
           TZ: "{{ timezone }}"
         memory: 1G
 
+    # --- Media managers ---
+    # Radarr and Sonarr get the full /data mount so they can
+    # hardlink from /data/torrents/* to /data/media/*
     - name: Deploy Radarr
       docker_container:
         name: radarr
-        image: hotio/radarr:latest
+        image: ghcr.io/hotio/radarr:latest
         state: started
         restart_policy: unless-stopped
         networks:
@@ -133,8 +154,7 @@
           - "7878:7878"
         volumes:
           - "{{ appdata_path }}/radarr:/config"
-          - "{{ media_path }}/movies:/movies"
-          - "{{ download_path }}:/downloads"
+          - "{{ data_path }}:/data"
         env:
           PUID: "{{ uid }}"
           PGID: "{{ gid }}"
@@ -145,7 +165,7 @@
     - name: Deploy Sonarr
       docker_container:
         name: sonarr
-        image: hotio/sonarr:latest
+        image: ghcr.io/hotio/sonarr:latest
         state: started
         restart_policy: unless-stopped
         networks:
@@ -154,8 +174,7 @@
           - "8989:8989"
         volumes:
           - "{{ appdata_path }}/sonarr:/config"
-          - "{{ media_path }}/tv:/tv"
-          - "{{ download_path }}:/downloads"
+          - "{{ data_path }}:/data"
         env:
           PUID: "{{ uid }}"
           PGID: "{{ gid }}"
