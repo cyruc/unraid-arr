@@ -1,0 +1,3 @@
+vault_pia_user: "your-pia-username"
+vault_pia_pass: "your-pia-password"
+vault_wg_key: "your-wireguard-private-key"
